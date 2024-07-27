@@ -493,7 +493,7 @@ static void timer_task(void* arg)
 #ifdef CONFIG_ESP_TIMER_SUPPORTS_ISR_DISPATCH_METHOD
 IRAM_ATTR void esp_timer_isr_dispatch_need_yield(void)
 {
-    __ASSERT_NO_MSG(k_is_in_isr();
+    __ASSERT_NO_MSG(k_is_in_isr());
     s_isr_dispatch_need_yield = pdTRUE;
 }
 #endif
