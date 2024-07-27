@@ -41,11 +41,10 @@ extern "C" {
 #define RMT_TX_CHANNEL_OFFSET_IN_GROUP 0
 #define RMT_RX_CHANNEL_OFFSET_IN_GROUP (SOC_RMT_CHANNELS_PER_GROUP - SOC_RMT_TX_CANDIDATES_PER_GROUP)
 
-
 #define RMT_ALLOW_INTR_PRIORITY_MASK ESP_INTR_FLAG_LOWMED
 
 // DMA buffer size must align to `rmt_symbol_word_t`
-#define RMT_DMA_DESC_BUF_MAX_SIZE      (DMA_DESCRIPTOR_BUFFER_MAX_SIZE & ~(sizeof(rmt_symbol_word_t) - 1))
+#define RMT_DMA_DESC_BUF_MAX_SIZE       (DMA_DESCRIPTOR_BUFFER_MAX_SIZE & ~(sizeof(rmt_symbol_word_t) - 1))
 
 #define RMT_DMA_NODES_PING_PONG  2  // two nodes ping-pong
 #define RMT_PM_LOCK_NAME_LEN_MAX 16
@@ -82,10 +81,10 @@ enum {
     RMT_TX_QUEUE_MAX,
 };
 
-typedef struct rmt_group_t rmt_group_t;
-typedef struct rmt_channel_t rmt_channel_t;
-typedef struct rmt_tx_channel_t rmt_tx_channel_t;
-typedef struct rmt_rx_channel_t rmt_rx_channel_t;
+typedef struct rmt_group_t        rmt_group_t;
+typedef struct rmt_channel_t      rmt_channel_t;
+typedef struct rmt_tx_channel_t   rmt_tx_channel_t;
+typedef struct rmt_rx_channel_t   rmt_rx_channel_t;
 typedef struct rmt_sync_manager_t rmt_sync_manager_t;
 
 struct rmt_group_t {
@@ -97,8 +96,9 @@ struct rmt_group_t {
     uint32_t occupy_mask;       // a set bit in the mask indicates the channel is not available
     rmt_tx_channel_t *tx_channels[SOC_RMT_TX_CANDIDATES_PER_GROUP]; // array of RMT TX channels
     rmt_rx_channel_t *rx_channels[SOC_RMT_RX_CANDIDATES_PER_GROUP]; // array of RMT RX channels
-    rmt_sync_manager_t *sync_manager; // sync manager, this can be extended into an array if there're more sync controllers in one RMT group
-    int intr_priority;     // RMT interrupt priority
+    rmt_sync_manager_t *sync_manager; // sync manager, this can be extended into an array if there're more sync
+                                // controllers in one RMT group
+    int intr_priority;          // RMT interrupt priority
 };
 
 struct rmt_channel_t {
@@ -121,34 +121,35 @@ struct rmt_channel_t {
 #endif
     // RMT channel common interface
     // The following IO functions will have per-implementation for TX and RX channel
-    esp_err_t (*del)(rmt_channel_t *channel);
-    esp_err_t (*set_carrier_action)(rmt_channel_t *channel, const rmt_carrier_config_t *config);
-    esp_err_t (*enable)(rmt_channel_t *channel);
-    esp_err_t (*disable)(rmt_channel_t *channel);
+    esp_err_t (*del)(rmt_channel_t* channel);
+    esp_err_t (*set_carrier_action)(rmt_channel_t* channel, rmt_carrier_config_t const* config);
+    esp_err_t (*enable)(rmt_channel_t* channel);
+    esp_err_t (*disable)(rmt_channel_t* channel);
 };
 
 typedef struct {
-    rmt_encoder_handle_t encoder;  // encode user payload into RMT symbols
-    const void *payload;           // encoder payload
-    size_t payload_bytes;          // payload size
-    int loop_count;                // transaction can be continued in a loop for specific times
-    int remain_loop_count;         // user required loop count may exceed hardware limitation, the driver will transfer them in batches
-    size_t transmitted_symbol_num; // track the number of transmitted symbols
+    rmt_encoder_handle_t encoder;   // encode user payload into RMT symbols
+    const void *payload;            // encoder payload
+    size_t payload_bytes;           // payload size
+    int loop_count;                 // transaction can be continued in a loop for specific times
+    int remain_loop_count;          // user required loop count may exceed hardware limitation, the driver will transfer them in batches
+    size_t transmitted_symbol_num;  // track the number of transmitted symbols
+
     struct {
-        uint32_t eot_level : 1;    // Set the output level for the "End Of Transmission"
-        uint32_t encoding_done: 1; // Indicate whether the encoding has finished (not the encoding of transmission)
+        uint32_t eot_level : 1;     // Set the output level for the "End Of Transmission"
+        uint32_t encoding_done: 1;  // Indicate whether the encoding has finished (not the encoding of transmission)
     } flags;
 
 } rmt_tx_trans_desc_t;
 
 struct rmt_tx_channel_t {
-    rmt_channel_t base; // channel base class
-    size_t mem_off;     // runtime argument, indicating the next writing position in the RMT hardware memory
-    size_t mem_end;     // runtime argument, indicating the end of current writing region
-    size_t ping_pong_symbols;  // ping-pong size (half of the RMT channel memory)
-    size_t queue_size;         // size of transaction queue
-    size_t num_trans_inflight; // indicates the number of transactions that are undergoing but not recycled to ready_queue
-    void *queues_storage;      // storage of transaction queues
+    rmt_channel_t base;             // channel base class
+    size_t mem_off;                 // runtime argument, indicating the next writing position in the RMT hardware memory
+    size_t mem_end;                 // runtime argument, indicating the end of current writing region
+    size_t ping_pong_symbols;       // ping-pong size (half of the RMT channel memory)
+    size_t queue_size;              // size of transaction queue
+    size_t num_trans_inflight;      // indicates the number of transactions that are undergoing but not recycled to ready_queue
+    void *queues_storage;           // storage of transaction queues
     QueueHandle_t trans_queues[RMT_TX_QUEUE_MAX]; // transaction queues
     StaticQueue_t trans_queue_structs[RMT_TX_QUEUE_MAX]; // memory to store the static structure for trans_queues
     rmt_tx_trans_desc_t *cur_trans; // points to current transaction
@@ -159,7 +160,7 @@ struct rmt_tx_channel_t {
 };
 
 typedef struct {
-    void *buffer;               // buffer for saving the received symbols
+    void*  buffer;              // buffer for saving the received symbols
     size_t buffer_size;         // size of the buffer, in bytes
     size_t received_symbol_num; // track the number of received symbols
     size_t copy_dest_off;       // tracking offset in the copy destination
@@ -183,14 +184,14 @@ struct rmt_rx_channel_t {
  * @param group_id Group ID
  * @return RMT group handle
  */
-rmt_group_t *rmt_acquire_group_handle(int group_id);
+rmt_group_t* rmt_acquire_group_handle(int group_id);
 
 /**
  * @brief Release RMT group handle
  *
  * @param group RMT group handle, returned from `rmt_acquire_group_handle`
  */
-void rmt_release_group_handle(rmt_group_t *group);
+void rmt_release_group_handle(rmt_group_t* group);
 
 /**
  * @brief Set clock source for RMT peripheral
@@ -205,7 +206,6 @@ void rmt_release_group_handle(rmt_group_t *group);
  */
 esp_err_t rmt_select_periph_clock(rmt_channel_handle_t chan, rmt_clock_source_t clk_src);
 
-
 /**
  * @brief Set interrupt priority to RMT group
  * @param group RMT group to set interrupt priority to
@@ -214,14 +214,14 @@ esp_err_t rmt_select_periph_clock(rmt_channel_handle_t chan, rmt_clock_source_t 
  *      - true:  Interrupt priority conflict with previous specified
  *      - false: Interrupt priority set successfully
  */
-bool rmt_set_intr_priority_to_group(rmt_group_t *group, int intr_priority);
+bool rmt_set_intr_priority_to_group(rmt_group_t* group, int intr_priority);
 
 /**
  * @brief Get isr_flags to be passed to `esp_intr_alloc_intrstatus()` according to `intr_priority` set in RMT group
  * @param group RMT group
  * @return isr_flags
  */
-int rmt_get_isr_flags(rmt_group_t *group);
+int rmt_get_isr_flags(rmt_group_t* group);
 
 #ifdef __cplusplus
 }

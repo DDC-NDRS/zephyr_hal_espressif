@@ -18,15 +18,15 @@ LOG_MODULE_REGISTER(rmt_esp32, CONFIG_LOG_DEFAULT_LEVEL);
 #include "hal/rmt_ll.h"
 #include "esp_private/periph_ctrl.h"
 
-static const char *TAG = "rmt";
+static char const* TAG = "rmt";
 
 typedef struct rmt_platform_t {
     struct k_mutex mutex;                   // platform level mutex lock
-    rmt_group_t *groups[SOC_RMT_GROUPS];    // array of RMT group instances
+    rmt_group_t* groups[SOC_RMT_GROUPS];    // array of RMT group instances
     int group_ref_counts[SOC_RMT_GROUPS];   // reference count used to protect group install/uninstall
 } rmt_platform_t;
 
-static rmt_platform_t s_rmt_platform;       // singleton platform
+static rmt_platform_t s_rmt_platform; // singleton platform
 
 void rmt_platform_init(void) {
     int rc;
@@ -67,7 +67,8 @@ rmt_group_t* rmt_acquire_group_handle(int group_id) {
             // hal layer initialize
             rmt_hal_init(&group->hal);
         }
-    } else { // group already install
+    }
+    else { // group already install
         group = s_rmt_platform.groups[group_id];
     }
 
@@ -78,19 +79,18 @@ rmt_group_t* rmt_acquire_group_handle(int group_id) {
     (void) k_mutex_unlock(&s_rmt_platform.mutex);
 
     if (new_group) {
-        LOG_DBG("new group(%d) at %p, occupy=%"PRIx32, group_id, group, group->occupy_mask);
+        LOG_DBG("new group(%d) at %p, occupy=%" PRIx32, group_id, group, group->occupy_mask);
     }
 
-    return group;
+    return (group);
 }
 
-void rmt_release_group_handle(rmt_group_t *group)
-{
+void rmt_release_group_handle(rmt_group_t* group) {
     int group_id = group->group_id;
     rmt_clock_source_t clk_src = group->clk_src;
     bool do_deinitialize = false;
 
-    _lock_acquire(&s_rmt_platform.mutex);
+    (void) k_mutex_lock(&s_rmt_platform.mutex, K_FOREVER);
     s_rmt_platform.group_ref_counts[group_id]--;
     if (s_rmt_platform.group_ref_counts[group_id] == 0) {
         do_deinitialize = true;
@@ -100,16 +100,17 @@ void rmt_release_group_handle(rmt_group_t *group)
         periph_module_disable(rmt_periph_signals.groups[group_id].module);
         free(group);
     }
-    _lock_release(&s_rmt_platform.mutex);
+    (void) k_mutex_unlock(&s_rmt_platform.mutex);
 
     switch (clk_src) {
-#if SOC_RMT_SUPPORT_RC_FAST
-    case RMT_CLK_SRC_RC_FAST:
-        periph_rtc_dig_clk8m_disable();
-        break;
-#endif // SOC_RMT_SUPPORT_RC_FAST
-    default:
-        break;
+        #if SOC_RMT_SUPPORT_RC_FAST
+        case RMT_CLK_SRC_RC_FAST :
+            periph_rtc_dig_clk8m_disable();
+            break;
+        #endif // SOC_RMT_SUPPORT_RC_FAST
+
+        default :
+            break;
     }
 
     if (do_deinitialize) {
@@ -117,10 +118,9 @@ void rmt_release_group_handle(rmt_group_t *group)
     }
 }
 
-esp_err_t rmt_select_periph_clock(rmt_channel_handle_t chan, rmt_clock_source_t clk_src)
-{
+esp_err_t rmt_select_periph_clock(rmt_channel_handle_t chan, rmt_clock_source_t clk_src) {
     esp_err_t ret = ESP_OK;
-    rmt_group_t *group = chan->group;
+    rmt_group_t* group = chan->group;
     int channel_id = chan->channel_id;
     uint32_t periph_src_clk_hz = 0;
     bool clock_selection_conflict = false;
@@ -130,7 +130,8 @@ esp_err_t rmt_select_periph_clock(rmt_channel_handle_t chan, rmt_clock_source_t 
     key = k_spin_lock(&group->spinlock);
     if (group->clk_src == 0) {
         group->clk_src = clk_src;
-    } else {
+    }
+    else {
         clock_selection_conflict = (group->clk_src != clk_src);
     }
     k_spin_unlock(&group->spinlock, key);
@@ -138,79 +139,75 @@ esp_err_t rmt_select_periph_clock(rmt_channel_handle_t chan, rmt_clock_source_t 
                         "group clock conflict, already is %d but attempt to %d", group->clk_src, clk_src);
 
     // TODO: [clk_tree] to use a generic clock enable/disable or acquire/release function for all clock source
-#if SOC_RMT_SUPPORT_RC_FAST
+    #if SOC_RMT_SUPPORT_RC_FAST
     if (clk_src == RMT_CLK_SRC_RC_FAST) {
         // RC_FAST clock is not enabled automatically on start up, we enable it here manually.
         // Note there's a ref count in the enable/disable function, we must call them in pair in the driver.
         periph_rtc_dig_clk8m_enable();
     }
-#endif // SOC_RMT_SUPPORT_RC_FAST
+    #endif // SOC_RMT_SUPPORT_RC_FAST
 
     // get clock source frequency
-    ESP_RETURN_ON_ERROR(esp_clk_tree_src_get_freq_hz((soc_module_clk_t)clk_src, ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, &periph_src_clk_hz),
+    ESP_RETURN_ON_ERROR(esp_clk_tree_src_get_freq_hz((soc_module_clk_t)clk_src, ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED,
+                                                     &periph_src_clk_hz),
                         TAG, "get clock source frequency failed");
 
-#if CONFIG_PM_ENABLE
+    #if CONFIG_PM_ENABLE
     // if DMA is not used, we're using CPU to push the data to the RMT FIFO
     // if the CPU frequency goes down, the transfer+encoding scheme could be unstable because CPU can't fill the data in time
     // so, choose ESP_PM_CPU_FREQ_MAX lock for non-dma mode
     // otherwise, chose lock type based on the clock source
     esp_pm_lock_type_t pm_lock_type = chan->dma_chan ? ESP_PM_NO_LIGHT_SLEEP : ESP_PM_CPU_FREQ_MAX;
 
-#if SOC_RMT_SUPPORT_APB
+    #if SOC_RMT_SUPPORT_APB
     if (clk_src == RMT_CLK_SRC_APB) {
         // APB clock frequency can be changed during DFS
         pm_lock_type = ESP_PM_APB_FREQ_MAX;
     }
-#endif // SOC_RMT_SUPPORT_APB
+    #endif // SOC_RMT_SUPPORT_APB
 
     sprintf(chan->pm_lock_name, "rmt_%d_%d", group->group_id, channel_id); // e.g. rmt_0_0
-    ret  = esp_pm_lock_create(pm_lock_type, 0, chan->pm_lock_name, &chan->pm_lock);
+    ret = esp_pm_lock_create(pm_lock_type, 0, chan->pm_lock_name, &chan->pm_lock);
     ESP_RETURN_ON_ERROR(ret, TAG, "create pm lock failed");
-#endif // CONFIG_PM_ENABLE
+    #endif // CONFIG_PM_ENABLE
 
     // no division for group clock source, to achieve highest resolution
     rmt_ll_set_group_clock_src(group->hal.regs, channel_id, clk_src, 1, 1, 0);
     group->resolution_hz = periph_src_clk_hz;
-    LOG_DBG("group clock resolution:%"PRIu32, group->resolution_hz);
-    return ret;
+    LOG_DBG("group clock resolution:%" PRIu32, group->resolution_hz);
+
+    return (ret);
 }
 
-esp_err_t rmt_get_channel_id(rmt_channel_handle_t channel, int *ret_id)
-{
+esp_err_t rmt_get_channel_id(rmt_channel_handle_t channel, int* ret_id) {
     ESP_RETURN_ON_FALSE(channel && ret_id, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
     *ret_id = channel->channel_id;
     return ESP_OK;
 }
 
-esp_err_t rmt_apply_carrier(rmt_channel_handle_t channel, const rmt_carrier_config_t *config)
-{
+esp_err_t rmt_apply_carrier(rmt_channel_handle_t channel, rmt_carrier_config_t const* config) {
     // specially, we allow config to be NULL, means to disable the carrier submodule
     ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
     return channel->set_carrier_action(channel, config);
 }
 
-esp_err_t rmt_del_channel(rmt_channel_handle_t channel)
-{
+esp_err_t rmt_del_channel(rmt_channel_handle_t channel) {
     ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
     gpio_reset_pin(channel->gpio_num);
     return channel->del(channel);
 }
 
-esp_err_t rmt_enable(rmt_channel_handle_t channel)
-{
+esp_err_t rmt_enable(rmt_channel_handle_t channel) {
     ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
     return channel->enable(channel);
 }
 
-esp_err_t rmt_disable(rmt_channel_handle_t channel)
-{
+esp_err_t rmt_disable(rmt_channel_handle_t channel) {
     ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
     return channel->disable(channel);
 }
 
-bool rmt_set_intr_priority_to_group(rmt_group_t *group, int intr_priority)
-{
+bool rmt_set_intr_priority_to_group(rmt_group_t* group, int intr_priority) {
     bool priority_conflict = false;
     k_spinlock_key_t key;
 
@@ -219,7 +216,8 @@ bool rmt_set_intr_priority_to_group(rmt_group_t *group, int intr_priority)
         // intr_priority never allocated, accept user's value unconditionally
         // intr_priority could only be set once here
         group->intr_priority = intr_priority;
-    } else {
+    }
+    else {
         // group intr_priority already specified
         // If interrupt priority specified before, it CANNOT BE CHANGED until `rmt_release_group_handle()` called
         // So we have to check if the new priority specified conflicts with the old one
@@ -238,21 +236,24 @@ bool rmt_set_intr_priority_to_group(rmt_group_t *group, int intr_priority)
         // user did not specify intr_priority, then keep the old priority
         // We'll use the `RMT_INTR_ALLOC_FLAG | RMT_ALLOW_INTR_PRIORITY_MASK`, which should always success
     }
+
     // The `group->intr_priority` will not change any longer, even though another task tries to modify it.
     // So we could exit critical here safely.
     k_spin_unlock(&group->spinlock, key);
 
-    return priority_conflict;
+    return (priority_conflict);
 }
 
-int rmt_get_isr_flags(rmt_group_t *group) {
+int rmt_get_isr_flags(rmt_group_t* group) {
     int isr_flags = RMT_INTR_ALLOC_FLAG;
     if (group->intr_priority) {
         // Use user-specified priority bit
         isr_flags |= (1 << (group->intr_priority));
-    } else {
+    }
+    else {
         // Allow all LOWMED priority bits
         isr_flags |= RMT_ALLOW_INTR_PRIORITY_MASK;
     }
-    return isr_flags;
+
+    return (isr_flags);
 }
