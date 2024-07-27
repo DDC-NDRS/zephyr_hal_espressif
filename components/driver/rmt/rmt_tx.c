@@ -74,7 +74,8 @@ static esp_err_t rmt_tx_init_dma_link(rmt_tx_channel_t* tx_channel, rmt_tx_chann
         .on_trans_eof = rmt_dma_tx_eof_cb,
     };
     gdma_register_tx_event_callbacks(tx_channel->base.dma_chan, &cbs, tx_channel);
-    return ESP_OK;
+
+    return (ESP_OK);
 }
 #endif // SOC_RMT_SUPPORT_DMA
 
@@ -134,7 +135,8 @@ static esp_err_t rmt_tx_register_to_group(rmt_tx_channel_t* tx_channel, rmt_tx_c
         }
     }
     ESP_RETURN_ON_FALSE(channel_id >= 0, ESP_ERR_NOT_FOUND, TAG, "no free tx channels");
-    return ESP_OK;
+
+    return (ESP_OK);
 }
 
 static void rmt_tx_unregister_from_group(rmt_channel_t* channel, rmt_group_t* group) {
@@ -167,7 +169,8 @@ static esp_err_t rmt_tx_create_trans_queue(rmt_tx_channel_t* tx_channel, rmt_tx_
         ESP_RETURN_ON_FALSE(xQueueSend(tx_channel->trans_queues[RMT_TX_QUEUE_READY], &p_trans_desc, 0) == pdTRUE,
                             ESP_ERR_INVALID_STATE, TAG, "ready queue full");
     }
-    return ESP_OK;
+
+    return (ESP_OK);
 }
 
 static esp_err_t rmt_tx_destroy(rmt_tx_channel_t* tx_channel) {
@@ -200,7 +203,8 @@ static esp_err_t rmt_tx_destroy(rmt_tx_channel_t* tx_channel) {
         rmt_tx_unregister_from_group(&tx_channel->base, tx_channel->base.group);
     }
     free(tx_channel);
-    return ESP_OK;
+
+    return (ESP_OK);
 }
 
 esp_err_t rmt_new_tx_channel(rmt_tx_channel_config_t const* config, rmt_channel_handle_t* ret_chan) {
@@ -327,13 +331,14 @@ esp_err_t rmt_new_tx_channel(rmt_tx_channel_config_t const* config, rmt_channel_
     ESP_LOGD(TAG, "new tx channel(%d,%d) at %p, gpio=%d, res=%"PRIu32"Hz, hw_mem_base=%p, dma_mem_base=%p, ping_pong_size=%zu, queue_depth=%zu",
              group_id, channel_id, tx_channel, config->gpio_num, tx_channel->base.resolution_hz,
              tx_channel->base.hw_mem_base, tx_channel->base.dma_mem_base, tx_channel->ping_pong_symbols, tx_channel->queue_size);
-    return ESP_OK;
+    return (ESP_OK);
 
-err:
+err :
     if (tx_channel) {
         rmt_tx_destroy(tx_channel);
     }
-    return ret;
+
+    return (ret);
 }
 
 static esp_err_t rmt_del_tx_channel(rmt_channel_handle_t channel) {
@@ -346,7 +351,7 @@ static esp_err_t rmt_del_tx_channel(rmt_channel_handle_t channel) {
     ESP_LOGD(TAG, "del tx channel(%d,%d)", group_id, channel_id);
     // recycle memory resource
     ESP_RETURN_ON_ERROR(rmt_tx_destroy(tx_chan), TAG, "destroy tx channel failed");
-    return ESP_OK;
+    return (ESP_OK);
 }
 
 esp_err_t rmt_new_sync_manager(rmt_sync_manager_config_t const* config, rmt_sync_manager_handle_t* ret_synchro) {
@@ -408,17 +413,18 @@ esp_err_t rmt_new_sync_manager(rmt_sync_manager_config_t const* config, rmt_sync
 
     *ret_synchro = synchro;
     ESP_LOGD(TAG, "new sync manager at %p, with channel mask:%02" PRIx32, synchro, synchro->channel_mask);
-    return ESP_OK;
+    return (ESP_OK);
 
-err:
+err :
     if (synchro) {
         if (synchro->group) {
             rmt_release_group_handle(synchro->group);
         }
         free(synchro);
     }
-    return ret;
-#endif // !SOC_RMT_SUPPORT_TX_SYNCHRO
+
+    return (ret);
+    #endif // !SOC_RMT_SUPPORT_TX_SYNCHRO
 }
 
 esp_err_t rmt_sync_reset(rmt_sync_manager_handle_t synchro) {
@@ -435,7 +441,7 @@ esp_err_t rmt_sync_reset(rmt_sync_manager_handle_t synchro) {
     }
     portEXIT_CRITICAL(&group->spinlock);
 
-    return ESP_OK;
+    return (ESP_OK);
     #endif // !SOC_RMT_SUPPORT_TX_SYNCHRO
 }
 
@@ -457,7 +463,8 @@ esp_err_t rmt_del_sync_manager(rmt_sync_manager_handle_t synchro) {
     free(synchro);
     ESP_LOGD(TAG, "del sync manager in group(%d)", group_id);
     rmt_release_group_handle(group);
-    return ESP_OK;
+
+    return (ESP_OK);
     #endif // !SOC_RMT_SUPPORT_TX_SYNCHRO
 }
 
@@ -481,7 +488,7 @@ esp_err_t rmt_tx_register_event_callbacks(rmt_channel_handle_t channel, rmt_tx_e
     tx_chan->on_trans_done = cbs->on_trans_done;
     tx_chan->user_data     = user_data;
 
-    return ESP_OK;
+    return (ESP_OK);
 }
 
 esp_err_t rmt_transmit(rmt_channel_handle_t channel, rmt_encoder_t* encoder, void const* payload, size_t payload_bytes,
@@ -546,7 +553,7 @@ esp_err_t rmt_transmit(rmt_channel_handle_t channel, rmt_encoder_t* encoder, voi
         }
     }
 
-    return ESP_OK;
+    return (ESP_OK);
 }
 
 esp_err_t rmt_tx_wait_all_done(rmt_channel_handle_t channel, int timeout_ms) {
@@ -563,7 +570,8 @@ esp_err_t rmt_tx_wait_all_done(rmt_channel_handle_t channel, int timeout_ms) {
                             ESP_ERR_INVALID_STATE, TAG, "ready queue full");
         tx_chan->num_trans_inflight--;
     }
-    return ESP_OK;
+
+    return (ESP_OK);
 }
 
 static void IRAM_ATTR rmt_tx_mark_eof(rmt_tx_channel_t *tx_chan) {
@@ -626,7 +634,7 @@ static size_t IRAM_ATTR rmt_encode_check_result(rmt_tx_channel_t* tx_chan, rmt_t
         }
     }
 
-    return encoded_symbols;
+    return (encoded_symbols);
 }
 
 static void IRAM_ATTR rmt_tx_do_transaction(rmt_tx_channel_t* tx_chan, rmt_tx_trans_desc_t* t) {
@@ -755,7 +763,7 @@ static esp_err_t rmt_tx_enable(rmt_channel_handle_t channel) {
         }
     }
 
-    return ESP_OK;
+    return (ESP_OK);
 }
 
 static esp_err_t rmt_tx_disable(rmt_channel_handle_t channel) {
@@ -825,7 +833,7 @@ static esp_err_t rmt_tx_disable(rmt_channel_handle_t channel) {
     // finally we switch to the INIT state
     atomic_store(&channel->fsm, RMT_FSM_INIT);
 
-    return ESP_OK;
+    return (ESP_OK);
 }
 
 static esp_err_t rmt_tx_modulate_carrier(rmt_channel_handle_t channel, rmt_carrier_config_t const* config) {
@@ -865,7 +873,8 @@ static esp_err_t rmt_tx_modulate_carrier(rmt_channel_handle_t channel, rmt_carri
     else {
         ESP_LOGD(TAG, "disable carrier modulation for channel(%d,%d)", group_id, channel_id);
     }
-    return ESP_OK;
+
+    return (ESP_OK);
 }
 
 static bool IRAM_ATTR rmt_isr_handle_tx_threshold(rmt_tx_channel_t* tx_chan) {
@@ -883,7 +892,7 @@ static bool IRAM_ATTR rmt_isr_handle_tx_threshold(rmt_tx_channel_t* tx_chan) {
     t->transmitted_symbol_num = encoded_symbols;
     tx_chan->mem_end = tx_chan->ping_pong_symbols * 3 - tx_chan->mem_end; // mem_end equals to either ping_pong_symbols or ping_pong_symbols*2
 
-    return false;
+    return (false);
 }
 
 static bool IRAM_ATTR rmt_isr_handle_tx_done(rmt_tx_channel_t* tx_chan) {
@@ -933,7 +942,7 @@ static bool IRAM_ATTR rmt_isr_handle_tx_done(rmt_tx_channel_t* tx_chan) {
         }
     }
 
-    return need_yield;
+    return (need_yield);
 }
 
 #if SOC_RMT_SUPPORT_TX_LOOP_COUNT
@@ -967,7 +976,8 @@ static bool IRAM_ATTR rmt_isr_handle_tx_loop_end(rmt_tx_channel_t* tx_chan) {
             // continue the loop transmission, don't need to fill the RMT symbols again, just restart the engine
             rmt_ll_tx_start(hal->regs, channel_id);
             portEXIT_CRITICAL_ISR(&channel->spinlock);
-            return need_yield;
+
+            return (need_yield);
         }
 
         // loop transaction finished
@@ -1015,7 +1025,8 @@ static bool IRAM_ATTR rmt_isr_handle_tx_loop_end(rmt_tx_channel_t* tx_chan) {
     if (awoken == pdTRUE) {
         need_yield = true;
     }
-    return need_yield;
+
+    return (need_yield);
 }
 #endif // SOC_RMT_SUPPORT_TX_LOOP_COUNT
 
@@ -1044,14 +1055,14 @@ static void IRAM_ATTR rmt_tx_default_isr(void* args) {
         }
     }
 
-#if SOC_RMT_SUPPORT_TX_LOOP_COUNT
+    #if SOC_RMT_SUPPORT_TX_LOOP_COUNT
     // Tx loop end interrupt
     if (status & RMT_LL_EVENT_TX_LOOP_END(channel_id)) {
         if (rmt_isr_handle_tx_loop_end(tx_chan)) {
             need_yield = true;
         }
     }
-#endif // SOC_RMT_SUPPORT_TX_LOOP_COUNT
+    #endif // SOC_RMT_SUPPORT_TX_LOOP_COUNT
 
     if (need_yield) {
         portYIELD_FROM_ISR();
@@ -1063,6 +1074,7 @@ static bool IRAM_ATTR rmt_dma_tx_eof_cb(gdma_channel_handle_t dma_chan, gdma_eve
                                         void* user_data) {
     rmt_tx_channel_t* tx_chan  = (rmt_tx_channel_t*)user_data;
     dma_descriptor_t* eof_desc = (dma_descriptor_t*)event_data->tx_eof_desc_addr;
+
     // if the DMA descriptor link is still a ring (i.e. hasn't broken down by `rmt_tx_mark_eof()`), then we treat it as
     // a valid ping-pong event
     if (eof_desc->next && eof_desc->next->next) {
@@ -1077,10 +1089,14 @@ static bool IRAM_ATTR rmt_dma_tx_eof_cb(gdma_channel_handle_t dma_chan, gdma_eve
             encoded_symbols += rmt_encode_check_result(tx_chan, t);
         }
         t->transmitted_symbol_num = encoded_symbols;
-        tx_chan->mem_end = tx_chan->ping_pong_symbols * 3 - tx_chan->mem_end; // mem_end equals to either ping_pong_symbols or ping_pong_symbols*2
+
+        // mem_end equals to either ping_pong_symbols or ping_pong_symbols * 2
+        tx_chan->mem_end = ((tx_chan->ping_pong_symbols * 3) - tx_chan->mem_end);
+
         // tell DMA that we have a new descriptor attached
         gdma_append(dma_chan);
     }
-    return false;
+
+    return (false);
 }
 #endif // SOC_RMT_SUPPORT_DMA

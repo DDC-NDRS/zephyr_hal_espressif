@@ -180,31 +180,48 @@ esp_err_t rmt_select_periph_clock(rmt_channel_handle_t chan, rmt_clock_source_t 
 }
 
 esp_err_t rmt_get_channel_id(rmt_channel_handle_t channel, int* ret_id) {
-    ESP_RETURN_ON_FALSE(channel && ret_id, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
+    if ((channel == NULL) || (ret_id == NULL)) {
+        return (ESP_ERR_INVALID_ARG);
+    }
+
     *ret_id = channel->channel_id;
-    return ESP_OK;
+
+    return (ESP_OK);
 }
 
 esp_err_t rmt_apply_carrier(rmt_channel_handle_t channel, rmt_carrier_config_t const* config) {
     // specially, we allow config to be NULL, means to disable the carrier submodule
-    ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
-    return channel->set_carrier_action(channel, config);
+    if (channel == NULL) {
+        return (ESP_ERR_INVALID_ARG);
+    }
+
+    return (channel->set_carrier_action(channel, config));
 }
 
 esp_err_t rmt_del_channel(rmt_channel_handle_t channel) {
-    ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
+    if (channel == NULL) {
+        return (ESP_ERR_INVALID_ARG);
+    }
+
     gpio_reset_pin(channel->gpio_num);
-    return channel->del(channel);
+
+    return (channel->del(channel));
 }
 
 esp_err_t rmt_enable(rmt_channel_handle_t channel) {
-    ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
-    return channel->enable(channel);
+    if (channel == NULL) {
+        return (ESP_ERR_INVALID_ARG);
+    }
+
+    return (channel->enable(channel));
 }
 
 esp_err_t rmt_disable(rmt_channel_handle_t channel) {
-    ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
-    return channel->disable(channel);
+    if (channel == NULL) {
+        return (ESP_ERR_INVALID_ARG);
+    }
+
+    return (channel->disable(channel));
 }
 
 bool rmt_set_intr_priority_to_group(rmt_group_t* group, int intr_priority) {

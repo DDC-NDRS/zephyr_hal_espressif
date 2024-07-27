@@ -16,7 +16,7 @@ extern "C" {
 #endif
 
 /** @cond */
-typedef struct rmt_encoder_t rmt_encoder_t;
+typedef struct rmt_encoder_s rmt_encoder_t;
 /** @endcond */
 
 /**
@@ -31,7 +31,7 @@ typedef enum {
 /**
  * @brief Interface of RMT encoder
  */
-struct rmt_encoder_t {
+struct rmt_encoder_s {
     /**
      * @brief Encode the user data into RMT symbols and write into RMT memory
      *

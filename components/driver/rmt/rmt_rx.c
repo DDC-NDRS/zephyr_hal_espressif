@@ -58,7 +58,8 @@ static void rmt_rx_mount_dma_buffer(dma_descriptor_t* desc_array, size_t array_s
         buffer_size -= RMT_DMA_DESC_BUF_MAX_SIZE;
         dma_node_i++;
     }
-    if (buffer_size) {
+
+    if (buffer_size > 0U) {
         desc              = &desc_array[dma_node_i];
         desc->dw0.suc_eof = 0;
         desc->dw0.size    = buffer_size;
@@ -86,6 +87,7 @@ static esp_err_t rmt_rx_init_dma_link(rmt_rx_channel_t* rx_channel, rmt_rx_chann
         .on_recv_eof = rmt_dma_rx_eof_cb,
     };
     gdma_register_rx_event_callbacks(rx_channel->base.dma_chan, &cbs, rx_channel);
+
     return (ESP_OK);
 }
 #endif // SOC_RMT_SUPPORT_DMA
@@ -147,6 +149,7 @@ static esp_err_t rmt_rx_register_to_group(rmt_rx_channel_t* rx_channel, rmt_rx_c
         }
     }
     ESP_RETURN_ON_FALSE(channel_id >= 0, ESP_ERR_NOT_FOUND, TAG, "no free rx channels");
+
     return (ESP_OK);
 }
 
@@ -179,6 +182,7 @@ static esp_err_t rmt_rx_destroy(rmt_rx_channel_t* rx_channel) {
         rmt_rx_unregister_from_group(&rx_channel->base, rx_channel->base.group);
     }
     free(rx_channel);
+
     return (ESP_OK);
 }
 
@@ -215,9 +219,11 @@ esp_err_t rmt_new_rx_channel(rmt_rx_channel_config_t const* config, rmt_channel_
     }
     rx_channel = heap_caps_calloc(1, sizeof(rmt_rx_channel_t) + num_dma_nodes * sizeof(dma_descriptor_t), mem_caps);
     ESP_GOTO_ON_FALSE(rx_channel, ESP_ERR_NO_MEM, err, TAG, "no mem for rx channel");
+
     rx_channel->num_dma_nodes = num_dma_nodes;
     // register the channel to group
     ESP_GOTO_ON_ERROR(rmt_rx_register_to_group(rx_channel, config), err, TAG, "register channel failed");
+
     rmt_group_t* group = rx_channel->base.group;
     rmt_hal_context_t* hal = &group->hal;
     int channel_id = rx_channel->base.channel_id;
@@ -314,9 +320,10 @@ esp_err_t rmt_new_rx_channel(rmt_rx_channel_config_t const* config, rmt_channel_
     ESP_LOGD(TAG, "new rx channel(%d,%d) at %p, gpio=%d, res=%" PRIu32 "Hz, hw_mem_base=%p, ping_pong_size=%d",
              group_id, channel_id, rx_channel, config->gpio_num, rx_channel->base.resolution_hz,
              rx_channel->base.hw_mem_base, rx_channel->ping_pong_symbols);
+
     return (ESP_OK);
 
-err:
+err :
     if (rx_channel) {
         rmt_rx_destroy(rx_channel);
     }
@@ -357,7 +364,8 @@ esp_err_t rmt_rx_register_event_callbacks(rmt_channel_handle_t channel, rmt_rx_e
     #endif
 
     rx_chan->on_recv_done = cbs->on_recv_done;
-    rx_chan->user_data    = user_data;
+    rx_chan->user_data = user_data;
+
     return (ESP_OK);
 }
 
@@ -372,6 +380,7 @@ esp_err_t rmt_receive(rmt_channel_handle_t channel, void* buffer, size_t buffer_
         ESP_RETURN_ON_FALSE_ISR(esp_ptr_internal(buffer), ESP_ERR_INVALID_ARG, TAG,
                                 "buffer must locate in internal RAM for DMA use");
     }
+
     if (channel->dma_chan) {
         ESP_RETURN_ON_FALSE_ISR(buffer_size <= rx_chan->num_dma_nodes * RMT_DMA_DESC_BUF_MAX_SIZE,
                                 ESP_ERR_INVALID_ARG, TAG, "buffer size exceeds DMA capacity");
@@ -465,6 +474,7 @@ static esp_err_t rmt_rx_demodulate_carrier(rmt_channel_handle_t channel, rmt_car
     else {
         ESP_LOGD(TAG, "disable carrier demodulation for channel(%d, %d)", group_id, channel_id);
     }
+
     return (ESP_OK);
     #endif
 }
@@ -588,7 +598,7 @@ static bool IRAM_ATTR rmt_isr_handle_rx_done(rmt_rx_channel_t* rx_chan) {
     rmt_ll_rx_set_mem_owner(hal->regs, channel_id, RMT_LL_MEM_OWNER_HW);
     portEXIT_CRITICAL_ISR(&channel->spinlock);
 
-#if !SOC_RMT_SUPPORT_RX_PINGPONG
+    #if !SOC_RMT_SUPPORT_RX_PINGPONG
     // for chips doesn't support ping-pong RX, we should check whether the receiver has encountered with a long frame,
     // whose length is longer than the channel capacity
     if (rmt_ll_rx_get_interrupt_status_raw(hal->regs, channel_id) & RMT_LL_EVENT_RX_ERROR(channel_id)) {
@@ -599,7 +609,7 @@ static bool IRAM_ATTR rmt_isr_handle_rx_done(rmt_rx_channel_t* rx_chan) {
         rmt_ll_clear_interrupt_status(hal->regs, RMT_LL_EVENT_RX_ERROR(channel_id));
         ESP_DRAM_LOGE(TAG, "hw buffer too small, received symbols truncated");
     }
-#endif // !SOC_RMT_SUPPORT_RX_PINGPONG
+    #endif // !SOC_RMT_SUPPORT_RX_PINGPONG
 
     // check whether all symbols are copied
     if (copy_size != stream_symbols * sizeof(rmt_symbol_word_t)) {
@@ -620,7 +630,8 @@ static bool IRAM_ATTR rmt_isr_handle_rx_done(rmt_rx_channel_t* rx_chan) {
             need_yield = true;
         }
     }
-    return need_yield;
+
+    return (need_yield);
 }
 
 #if SOC_RMT_SUPPORT_RX_PINGPONG
@@ -650,7 +661,7 @@ static bool IRAM_ATTR rmt_isr_handle_rx_threshold(rmt_rx_channel_t* rx_chan) {
     // update the hw memory offset, where stores the next RMT symbols to copy
     rx_chan->mem_off = rx_chan->ping_pong_symbols - rx_chan->mem_off;
 
-    return false;
+    return (false);
 }
 #endif // SOC_RMT_SUPPORT_RX_PINGPONG
 
@@ -664,14 +675,14 @@ static void IRAM_ATTR rmt_rx_default_isr(void* args) {
 
     uint32_t status = rmt_ll_rx_get_interrupt_status(hal->regs, channel_id);
 
-#if SOC_RMT_SUPPORT_RX_PINGPONG
+    #if SOC_RMT_SUPPORT_RX_PINGPONG
     // RX threshold interrupt
     if (status & RMT_LL_EVENT_RX_THRES(channel_id)) {
         if (rmt_isr_handle_rx_threshold(rx_chan)) {
             need_yield = true;
         }
     }
-#endif // SOC_RMT_SUPPORT_RX_PINGPONG
+    #endif // SOC_RMT_SUPPORT_RX_PINGPONG
 
     // RX end interrupt
     if (status & RMT_LL_EVENT_RX_DONE(channel_id)) {
@@ -688,12 +699,14 @@ static void IRAM_ATTR rmt_rx_default_isr(void* args) {
 #if SOC_RMT_SUPPORT_DMA
 static size_t IRAM_ATTR rmt_rx_get_received_symbol_num_from_dma(dma_descriptor_t* desc) {
     size_t received_bytes = 0;
+
     while (desc) {
         received_bytes += desc->dw0.length;
         desc = desc->next;
     }
     received_bytes = ALIGN_UP(received_bytes, sizeof(rmt_symbol_word_t));
-    return received_bytes / sizeof(rmt_symbol_word_t);
+
+    return (received_bytes / sizeof(rmt_symbol_word_t));
 }
 
 static bool IRAM_ATTR rmt_dma_rx_eof_cb(gdma_channel_handle_t dma_chan, gdma_event_data_t* event_data,
@@ -725,6 +738,6 @@ static bool IRAM_ATTR rmt_dma_rx_eof_cb(gdma_channel_handle_t dma_chan, gdma_eve
         }
     }
 
-    return need_yield;
+    return (need_yield);
 }
 #endif // SOC_RMT_SUPPORT_DMA

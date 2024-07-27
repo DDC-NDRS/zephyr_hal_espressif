@@ -14,6 +14,7 @@
 // Set the maximum log level for this source file
 #define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
 #endif
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "driver/rmt_encoder.h"
@@ -96,6 +97,7 @@ static size_t IRAM_ATTR rmt_encode_bytes(rmt_encoder_t* encoder, rmt_channel_han
         if (bytes_encoder->flags.msb_first) {
             cur_byte = _bitwise_reverse(cur_byte);
         }
+
         while ((len > 0) && (bit_index < 8)) {
             if (cur_byte & (1 << bit_index)) {
                 mem_to[tx_chan->mem_off++] = bytes_encoder->bit1;
@@ -155,7 +157,8 @@ static size_t IRAM_ATTR rmt_encode_bytes(rmt_encoder_t* encoder, rmt_channel_han
     }
 
     *ret_state = state;
-    return encode_len;
+
+    return (encode_len);
 }
 
 static esp_err_t rmt_copy_encoder_reset(rmt_encoder_t* encoder) {
@@ -243,7 +246,8 @@ static size_t IRAM_ATTR rmt_encode_copy(rmt_encoder_t* encoder, rmt_channel_hand
     }
 
     *ret_state = state;
-    return encode_len;
+
+    return (encode_len);
 }
 
 static esp_err_t rmt_del_bytes_encoder(rmt_encoder_t* encoder) {
@@ -274,8 +278,9 @@ esp_err_t rmt_new_bytes_encoder(rmt_bytes_encoder_config_t const* config, rmt_en
     // return general encoder handle
     *ret_encoder = &encoder->base;
     ESP_LOGD(TAG, "new bytes encoder @%p", encoder);
-err:
-    return ret;
+
+err :
+    return (ret);
 }
 
 esp_err_t rmt_bytes_encoder_update_config(rmt_encoder_handle_t bytes_encoder,
@@ -301,7 +306,7 @@ esp_err_t rmt_new_copy_encoder(rmt_copy_encoder_config_t const* config, rmt_enco
     *ret_encoder = &encoder->base;
     ESP_LOGD(TAG, "new copy encoder @%p", encoder);
 
-err:
+err :
     return (ret);
 }
 
