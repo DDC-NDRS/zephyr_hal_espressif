@@ -108,10 +108,12 @@ static esp_err_t rmt_tx_register_to_group(rmt_tx_channel_t* tx_channel, rmt_tx_c
     uint32_t channel_mask = (1 << mem_block_num) - 1;
     rmt_group_t* group = NULL;
     int channel_id = -1;
+    k_spinlock_key_t key;
+
     for (int i = 0; i < SOC_RMT_GROUPS; i++) {
         group = rmt_acquire_group_handle(i);
         ESP_RETURN_ON_FALSE(group, ESP_ERR_NO_MEM, TAG, "no mem for group (%d)", i);
-        portENTER_CRITICAL(&group->spinlock);
+        key = k_spin_lock(&group->spinlock);
         for (int j = channel_scan_start; j < channel_scan_end; j++) {
             if (!(group->occupy_mask & (channel_mask << j))) {
                 group->occupy_mask |= (channel_mask << j);
@@ -121,7 +123,7 @@ static esp_err_t rmt_tx_register_to_group(rmt_tx_channel_t* tx_channel, rmt_tx_c
                 break;
             }
         }
-        portEXIT_CRITICAL(&group->spinlock);
+        k_spin_unlock(&group->spinlock, key);
         if (channel_id < 0) {
             // didn't find a capable channel in the group, don't forget to release the group handle
             rmt_release_group_handle(group);
@@ -140,10 +142,12 @@ static esp_err_t rmt_tx_register_to_group(rmt_tx_channel_t* tx_channel, rmt_tx_c
 }
 
 static void rmt_tx_unregister_from_group(rmt_channel_t* channel, rmt_group_t* group) {
-    portENTER_CRITICAL(&group->spinlock);
+    k_spinlock_key_t key;
+
+    key = k_spin_lock(&group->spinlock);
     group->tx_channels[channel->channel_id] = NULL;
     group->occupy_mask &= ~(channel->channel_mask << (channel->channel_id + RMT_TX_CHANNEL_OFFSET_IN_GROUP));
-    portEXIT_CRITICAL(&group->spinlock);
+    k_spin_unlock(&group->spinlock, key);
     // channel has a reference on group, release it now
     rmt_release_group_handle(group);
 }
@@ -255,11 +259,12 @@ esp_err_t rmt_new_tx_channel(rmt_tx_channel_config_t const* config, rmt_channel_
     rmt_hal_context_t* hal = &group->hal;
     int channel_id = tx_channel->base.channel_id;
     int group_id = group->group_id;
+    k_spinlock_key_t key;
 
     // reset channel, make sure the TX engine is not working, and events are cleared
-    portENTER_CRITICAL(&group->spinlock);
+    key = k_spin_lock(&group->spinlock);
     rmt_hal_tx_channel_reset(&group->hal, channel_id);
-    portEXIT_CRITICAL(&group->spinlock);
+    k_spin_unlock(&group->spinlock, key);
     // install tx interrupt
     // --- install interrupt service
     // interrupt is mandatory to run basic RMT transactions, so it's not lazy installed in
@@ -392,16 +397,18 @@ esp_err_t rmt_new_sync_manager(rmt_sync_manager_config_t const* config, rmt_sync
 
     // search and register sync manager to group
     bool new_synchro = false;
-    portENTER_CRITICAL(&group->spinlock);
+    k_spinlock_key_t key;
+
+    key = k_spin_lock(&group->spinlock);
     if (group->sync_manager == NULL) {
         group->sync_manager = synchro;
         new_synchro = true;
     }
-    portEXIT_CRITICAL(&group->spinlock);
+    k_spin_unlock(&group->spinlock, key);
     ESP_GOTO_ON_FALSE(new_synchro, ESP_ERR_NOT_FOUND, err, TAG, "no free sync manager in the group");
 
     // enable sync manager
-    portENTER_CRITICAL(&group->spinlock);
+    key = k_spin_lock(&group->spinlock);
     rmt_ll_tx_enable_sync(group->hal.regs, true);
     rmt_ll_tx_sync_group_add_channels(group->hal.regs, channel_mask);
     rmt_ll_tx_reset_channels_clock_div(group->hal.regs, channel_mask);
@@ -409,7 +416,7 @@ esp_err_t rmt_new_sync_manager(rmt_sync_manager_config_t const* config, rmt_sync
     for (size_t i = 0; i < config->array_size; i++) {
         rmt_ll_tx_reset_pointer(group->hal.regs, config->tx_channel_array[i]->channel_id);
     }
-    portEXIT_CRITICAL(&group->spinlock);
+    k_spin_unlock(&group->spinlock, key);
 
     *ret_synchro = synchro;
     ESP_LOGD(TAG, "new sync manager at %p, with channel mask:%02" PRIx32, synchro, synchro->channel_mask);
@@ -434,12 +441,12 @@ esp_err_t rmt_sync_reset(rmt_sync_manager_handle_t synchro) {
     ESP_RETURN_ON_FALSE(synchro, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
     rmt_group_t* group = synchro->group;
 
-    portENTER_CRITICAL(&group->spinlock);
+    key = k_spin_lock(&group->spinlock);
     rmt_ll_tx_reset_channels_clock_div(group->hal.regs, synchro->channel_mask);
     for (size_t i = 0; i < synchro->array_size; i++) {
         rmt_ll_tx_reset_pointer(group->hal.regs, synchro->tx_channel_array[i]->channel_id);
     }
-    portEXIT_CRITICAL(&group->spinlock);
+    k_spin_unlock(&group->spinlock, key);
 
     return (ESP_OK);
     #endif // !SOC_RMT_SUPPORT_TX_SYNCHRO
@@ -453,12 +460,12 @@ esp_err_t rmt_del_sync_manager(rmt_sync_manager_handle_t synchro) {
     rmt_group_t* group = synchro->group;
     int group_id = group->group_id;
 
-    portENTER_CRITICAL(&group->spinlock);
+    key = k_spin_lock(&group->spinlock);
     group->sync_manager = NULL;
     // disable sync manager
     rmt_ll_tx_enable_sync(group->hal.regs, false);
     rmt_ll_tx_sync_group_remove_channels(group->hal.regs, synchro->channel_mask);
-    portEXIT_CRITICAL(&group->spinlock);
+    k_spin_unlock(&group->spinlock, key);
 
     free(synchro);
     ESP_LOGD(TAG, "del sync manager in group(%d)", group_id);
@@ -581,6 +588,7 @@ static void IRAM_ATTR rmt_tx_mark_eof(rmt_tx_channel_t *tx_chan) {
     rmt_symbol_word_t* mem_to = channel->dma_chan ? channel->dma_mem_base : channel->hw_mem_base;
     rmt_tx_trans_desc_t* cur_trans = tx_chan->cur_trans;
     dma_descriptor_t *desc = NULL;
+    k_spinlock_key_t key;
 
     // a RMT word whose duration is zero means a "stop" pattern
     mem_to[tx_chan->mem_off++] = (rmt_symbol_word_t) {
@@ -606,11 +614,11 @@ static void IRAM_ATTR rmt_tx_mark_eof(rmt_tx_channel_t *tx_chan) {
         desc->next = NULL;
     }
     else {
-        portENTER_CRITICAL_ISR(&group->spinlock);
+        key = k_spin_lock(&group->spinlock);
         // This is the end of a sequence of encoding sessions, disable the threshold interrupt as no more data will be
         // put into RMT memory block
         rmt_ll_enable_interrupt(group->hal.regs, RMT_LL_EVENT_TX_THRES(channel_id), false);
-        portEXIT_CRITICAL_ISR(&group->spinlock);
+        k_spin_unlock(&group->spinlock, key);
     }
 }
 
@@ -642,6 +650,7 @@ static void IRAM_ATTR rmt_tx_do_transaction(rmt_tx_channel_t* tx_chan, rmt_tx_tr
     rmt_group_t* group = channel->group;
     rmt_hal_context_t* hal = &group->hal;
     int channel_id = channel->channel_id;
+    k_spinlock_key_t key;
 
     // update current transaction
     tx_chan->cur_trans = t;
@@ -659,7 +668,7 @@ static void IRAM_ATTR rmt_tx_do_transaction(rmt_tx_channel_t* tx_chan, rmt_tx_tr
 #endif // SOC_RMT_SUPPORT_DMA
 
     // set transaction specific parameters
-    portENTER_CRITICAL_SAFE(&channel->spinlock);
+    key = k_spin_lock(&channel->spinlock);
     rmt_ll_tx_reset_pointer(hal->regs, channel_id); // reset pointer for new transaction
     rmt_ll_tx_enable_loop(hal->regs, channel_id, t->loop_count != 0);
     #if SOC_RMT_SUPPORT_TX_LOOP_AUTO_STOP
@@ -676,10 +685,10 @@ static void IRAM_ATTR rmt_tx_do_transaction(rmt_tx_channel_t* tx_chan, rmt_tx_tr
         t->remain_loop_count -= this_loop_count;
     }
     #endif // SOC_RMT_SUPPORT_TX_LOOP_COUNT
-    portEXIT_CRITICAL_SAFE(&channel->spinlock);
+    k_spin_unlock(&channel->spinlock, key);
 
     // enable/disable specific interrupts
-    portENTER_CRITICAL_SAFE(&group->spinlock);
+    key = k_spin_lock(&group->spinlock);
     #if SOC_RMT_SUPPORT_TX_LOOP_COUNT
     rmt_ll_enable_interrupt(hal->regs, RMT_LL_EVENT_TX_LOOP_END(channel_id), t->loop_count > 0);
     #endif // SOC_RMT_SUPPORT_TX_LOOP_COUNT
@@ -694,7 +703,7 @@ static void IRAM_ATTR rmt_tx_do_transaction(rmt_tx_channel_t* tx_chan, rmt_tx_tr
     }
     // don't generate trans done event for loop transmission
     rmt_ll_enable_interrupt(hal->regs, RMT_LL_EVENT_TX_DONE(channel_id), t->loop_count == 0);
-    portEXIT_CRITICAL_SAFE(&group->spinlock);
+    k_spin_unlock(&group->spinlock, key);
 
     // at the beginning of a new transaction, encoding memory offset should start from zero.
     // It will increase in the encode function e.g. `rmt_encode_copy()`
@@ -714,10 +723,10 @@ static void IRAM_ATTR rmt_tx_do_transaction(rmt_tx_channel_t* tx_chan, rmt_tx_tr
     }
 #endif
     // turn on the TX machine
-    portENTER_CRITICAL_SAFE(&channel->spinlock);
+    key = k_spin_lock(&channel->spinlock);
     rmt_ll_tx_fix_idle_level(hal->regs, channel_id, t->flags.eot_level, true);
     rmt_ll_tx_start(hal->regs, channel_id);
-    portEXIT_CRITICAL_SAFE(&channel->spinlock);
+    k_spin_unlock(&channel->spinlock, key);
 }
 
 static esp_err_t rmt_tx_enable(rmt_channel_handle_t channel) {
@@ -726,6 +735,7 @@ static esp_err_t rmt_tx_enable(rmt_channel_handle_t channel) {
     ESP_RETURN_ON_FALSE(atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_ENABLE_WAIT),
                         ESP_ERR_INVALID_STATE, TAG, "channel not in init state");
     rmt_tx_channel_t* tx_chan = __containerof(channel, rmt_tx_channel_t, base);
+    k_spinlock_key_t key;
 
     // acquire power manager lock
     if (channel->pm_lock) {
@@ -738,9 +748,9 @@ static esp_err_t rmt_tx_enable(rmt_channel_handle_t channel) {
     int channel_id = channel->channel_id;
     if (channel->dma_chan) {
         // enable the DMA access mode
-        portENTER_CRITICAL(&channel->spinlock);
+        key = k_spin_lock(&channel->spinlock);
         rmt_ll_tx_enable_dma(hal->regs, channel_id, true);
-        portEXIT_CRITICAL(&channel->spinlock);
+        k_spin_unlock(&channel->spinlock, key);
 
         gdma_connect(channel->dma_chan, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_RMT, 0));
     }
@@ -771,6 +781,7 @@ static esp_err_t rmt_tx_disable(rmt_channel_handle_t channel) {
     rmt_group_t* group = channel->group;
     rmt_hal_context_t *hal = &group->hal;
     int channel_id = channel->channel_id;
+    k_spinlock_key_t key;
 
     // can disable the channel when it's in `enable` or `run` state
     bool valid_state = false;
@@ -782,14 +793,14 @@ static esp_err_t rmt_tx_disable(rmt_channel_handle_t channel) {
     if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_INIT_WAIT)) {
         valid_state = true;
         // disable the hardware
-        portENTER_CRITICAL(&channel->spinlock);
+        key = k_spin_lock(&channel->spinlock);
         rmt_ll_tx_enable_loop(hal->regs, channel->channel_id, false);
         #if SOC_RMT_SUPPORT_TX_ASYNC_STOP
         rmt_ll_tx_stop(hal->regs, channel->channel_id);
         #endif
-        portEXIT_CRITICAL(&channel->spinlock);
+        k_spin_unlock(&channel->spinlock, key);
 
-        portENTER_CRITICAL(&group->spinlock);
+        key = k_spin_lock(&group->spinlock);
         rmt_ll_enable_interrupt(hal->regs, RMT_LL_EVENT_TX_MASK(channel_id), false);
         #if !SOC_RMT_SUPPORT_TX_ASYNC_STOP
         // we do a trick to stop the undergoing transmission
@@ -800,7 +811,7 @@ static esp_err_t rmt_tx_disable(rmt_channel_handle_t channel) {
         }
         #endif
         rmt_ll_clear_interrupt_status(hal->regs, RMT_LL_EVENT_TX_MASK(channel_id));
-        portEXIT_CRITICAL(&group->spinlock);
+        k_spin_unlock(&group->spinlock, key);
     }
     ESP_RETURN_ON_FALSE(valid_state, ESP_ERR_INVALID_STATE, TAG, "channel can't be disabled in state %d", expected_fsm);
 
@@ -811,9 +822,9 @@ static esp_err_t rmt_tx_disable(rmt_channel_handle_t channel) {
         gdma_disconnect(channel->dma_chan);
 
         // disable DMA access mode
-        portENTER_CRITICAL(&channel->spinlock);
+        key = k_spin_lock(&channel->spinlock);
         rmt_ll_tx_enable_dma(hal->regs, channel_id, false);
-        portEXIT_CRITICAL(&channel->spinlock);
+        k_spin_unlock(&channel->spinlock, key);
     }
     #endif
 
@@ -842,6 +853,7 @@ static esp_err_t rmt_tx_modulate_carrier(rmt_channel_handle_t channel, rmt_carri
     int group_id = group->group_id;
     int channel_id = channel->channel_id;
     uint32_t real_frequency = 0;
+    k_spinlock_key_t key;
 
     if (config && config->frequency_hz) {
         // carrier module works base on group clock
@@ -850,21 +862,21 @@ static esp_err_t rmt_tx_modulate_carrier(rmt_channel_handle_t channel, rmt_carri
         uint32_t high_ticks = total_ticks * config->duty_cycle;
         uint32_t low_ticks  = total_ticks - high_ticks;
 
-        portENTER_CRITICAL(&channel->spinlock);
+        key = k_spin_lock(&channel->spinlock);
         rmt_ll_tx_set_carrier_level(hal->regs, channel_id, !config->flags.polarity_active_low);
         rmt_ll_tx_set_carrier_high_low_ticks(hal->regs, channel_id, high_ticks, low_ticks);
         #if SOC_RMT_SUPPORT_TX_CARRIER_DATA_ONLY
         rmt_ll_tx_enable_carrier_always_on(hal->regs, channel_id, config->flags.always_on);
         #endif
-        portEXIT_CRITICAL(&channel->spinlock);
+        k_spin_unlock(&channel->spinlock, key);
         // save real carrier frequency
         real_frequency = group->resolution_hz / total_ticks;
     }
 
     // enable/disable carrier modulation
-    portENTER_CRITICAL(&channel->spinlock);
+    key = k_spin_lock(&channel->spinlock);
     rmt_ll_tx_enable_carrier_modulation(hal->regs, channel_id, real_frequency > 0);
-    portEXIT_CRITICAL(&channel->spinlock);
+    k_spin_unlock(&channel->spinlock, key);
 
     if (real_frequency > 0) {
         ESP_LOGD(TAG, "enable carrier modulation for channel(%d,%d), freq=%" PRIu32 "Hz", group_id, channel_id,
@@ -954,28 +966,29 @@ static bool IRAM_ATTR rmt_isr_handle_tx_loop_end(rmt_tx_channel_t* tx_chan) {
     BaseType_t awoken = pdFALSE;
     rmt_tx_trans_desc_t *trans_desc = NULL;
     bool need_yield = false;
+    k_spinlock_key_t key;
 
     trans_desc = tx_chan->cur_trans;
     if (trans_desc) {
         #if !SOC_RMT_SUPPORT_TX_LOOP_AUTO_STOP
-        portENTER_CRITICAL_ISR(&channel->spinlock);
+        key = k_spin_lock(&channel->spinlock);
         // This is a workaround for chips that don't support loop auto stop
         // Although we stop the transaction immediately in ISR handler, it's still possible that some rmt symbols have
         // sneaked out
         rmt_ll_tx_stop(hal->regs, channel_id);
-        portEXIT_CRITICAL_ISR(&channel->spinlock);
+        k_spin_unlock(&channel->spinlock, key);
         #endif // SOC_RMT_SUPPORT_TX_LOOP_AUTO_STOP
 
         // continue unfinished loop transaction
         if (trans_desc->remain_loop_count) {
             uint32_t this_loop_count = MIN(trans_desc->remain_loop_count, RMT_LL_MAX_LOOP_COUNT_PER_BATCH);
             trans_desc->remain_loop_count -= this_loop_count;
-            portENTER_CRITICAL_ISR(&channel->spinlock);
+            key = k_spin_lock(&channel->spinlock);
             rmt_ll_tx_set_loop_count(hal->regs, channel_id, this_loop_count);
             rmt_ll_tx_reset_pointer(hal->regs, channel_id);
             // continue the loop transmission, don't need to fill the RMT symbols again, just restart the engine
             rmt_ll_tx_start(hal->regs, channel_id);
-            portEXIT_CRITICAL_ISR(&channel->spinlock);
+            k_spin_unlock(&channel->spinlock, key);
 
             return (need_yield);
         }
