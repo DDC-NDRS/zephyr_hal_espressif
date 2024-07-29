@@ -744,7 +744,7 @@ static bool IRAM_ATTR rmt_dma_rx_eof_cb(gdma_channel_handle_t dma_chan, gdma_eve
     if (rx_chan->on_recv_done) {
         rmt_rx_done_event_data_t edata = {
             .received_symbols = trans_desc->buffer,
-            .num_symbols      = rmt_rx_get_received_symbol_num_from_dma(rx_chan->dma_nodes),
+            .num_symbols = rmt_rx_get_received_symbol_num_from_dma(rx_chan->dma_nodes),
         };
 
         if (rx_chan->on_recv_done(channel, &edata, rx_chan->user_data)) {

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <zephyr/kernel.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/cdefs.h>
@@ -153,6 +154,8 @@ static void rmt_tx_unregister_from_group(rmt_channel_t* channel, rmt_group_t* gr
 }
 
 static esp_err_t rmt_tx_create_trans_queue(rmt_tx_channel_t* tx_channel, rmt_tx_channel_config_t const* config) {
+    int ret;
+
     tx_channel->queue_size = config->trans_queue_depth;
     // the queue only saves transaction description pointers
     tx_channel->queues_storage = heap_caps_calloc(config->trans_queue_depth * RMT_TX_QUEUE_MAX,
@@ -160,18 +163,24 @@ static esp_err_t rmt_tx_create_trans_queue(rmt_tx_channel_t* tx_channel, rmt_tx_
     ESP_RETURN_ON_FALSE(tx_channel->queues_storage, ESP_ERR_NO_MEM, TAG, "no mem for queue storage");
     rmt_tx_trans_desc_t** pp_trans_desc = (rmt_tx_trans_desc_t**)tx_channel->queues_storage;
     for (int i = 0; i < RMT_TX_QUEUE_MAX; i++) {
-        tx_channel->trans_queues[i] = xQueueCreateStatic(config->trans_queue_depth, sizeof(rmt_tx_trans_desc_t*),
-                                                         (uint8_t*)pp_trans_desc, &tx_channel->trans_queue_structs[i]);
+        k_msgq_init(&tx_channel->trans_queue_structs[i],
+                    (char*)pp_trans_desc, sizeof(rmt_tx_trans_desc_t*), config->trans_queue_depth);
+        tx_channel->trans_queues[i] = &tx_channel->trans_queue_structs[i];
+
         pp_trans_desc += config->trans_queue_depth;
         // sanity check
         assert(tx_channel->trans_queues[i]);
     }
+
     // initialize the ready queue
     rmt_tx_trans_desc_t* p_trans_desc = NULL;
     for (int i = 0; i < config->trans_queue_depth; i++) {
         p_trans_desc = &tx_channel->trans_desc_pool[i];
-        ESP_RETURN_ON_FALSE(xQueueSend(tx_channel->trans_queues[RMT_TX_QUEUE_READY], &p_trans_desc, 0) == pdTRUE,
-                            ESP_ERR_INVALID_STATE, TAG, "ready queue full");
+        ret = k_msgq_put(tx_channel->trans_queues[RMT_TX_QUEUE_READY], &p_trans_desc, K_NO_WAIT);
+        if (ret != 0) {
+            // "ready queue full"
+            return (ESP_ERR_INVALID_STATE);
+        }
     }
 
     return (ESP_OK);
@@ -193,15 +202,18 @@ static esp_err_t rmt_tx_destroy(rmt_tx_channel_t* tx_channel) {
 
     for (int i = 0; i < RMT_TX_QUEUE_MAX; i++) {
         if (tx_channel->trans_queues[i]) {
-            vQueueDelete(tx_channel->trans_queues[i]);
+            k_msgq_purge(tx_channel->trans_queues[i]);
         }
     }
+
     if (tx_channel->queues_storage) {
         free(tx_channel->queues_storage);
     }
+
     if (tx_channel->base.dma_mem_base) {
         free(tx_channel->base.dma_mem_base);
     }
+
     if (tx_channel->base.group) {
         // de-register channel from RMT group
         rmt_tx_unregister_from_group(&tx_channel->base, tx_channel->base.group);
@@ -513,15 +525,19 @@ esp_err_t rmt_transmit(rmt_channel_handle_t channel, rmt_encoder_t* encoder, voi
     ESP_RETURN_ON_FALSE(esp_ptr_internal(payload), ESP_ERR_INVALID_ARG, TAG, "payload not in internal RAM");
     #endif
 
-    TickType_t queue_wait_ticks = portMAX_DELAY;
+    k_timeout_t timeout = K_FOREVER;
     if (config->flags.queue_nonblocking) {
-        queue_wait_ticks = 0;
+        timeout = K_NO_WAIT;
     }
     rmt_tx_channel_t* tx_chan = __containerof(channel, rmt_tx_channel_t, base);
     rmt_tx_trans_desc_t* t = NULL;
     // acquire one transaction description from ready queue or complete queue
-    if (xQueueReceive(tx_chan->trans_queues[RMT_TX_QUEUE_READY], &t, 0) != pdTRUE) {
-        if (xQueueReceive(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &t, queue_wait_ticks) == pdTRUE) {
+    int ret;
+
+    ret = k_msgq_get(tx_chan->trans_queues[RMT_TX_QUEUE_READY], &t, K_NO_WAIT);
+    if (ret != 0) {
+        ret = k_msgq_get(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &t, timeout);
+        if (ret == 0) {
             tx_chan->num_trans_inflight--;
         }
     }
@@ -538,20 +554,25 @@ esp_err_t rmt_transmit(rmt_channel_handle_t channel, rmt_encoder_t* encoder, voi
     t->flags.eot_level   = config->flags.eot_level;
 
     // send the transaction descriptor to queue
-    if (xQueueSend(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &t, 0) == pdTRUE) {
+    ret = k_msgq_put(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &t, K_NO_WAIT);
+    if (ret == 0) {
         tx_chan->num_trans_inflight++;
     }
     else {
         // put the trans descriptor back to ready_queue
-        ESP_RETURN_ON_FALSE(xQueueSend(tx_chan->trans_queues[RMT_TX_QUEUE_READY], &t, 0) == pdTRUE,
-                            ESP_ERR_INVALID_STATE, TAG, "ready queue full");
+        ret = k_msgq_put(tx_chan->trans_queues[RMT_TX_QUEUE_READY], &t, K_NO_WAIT);
+        if (ret != 0) {
+            // "ready queue full"
+            return (ESP_ERR_INVALID_STATE);
+        }
     }
 
     // check if we need to start one pending transaction
     rmt_fsm_t expected_fsm = RMT_FSM_ENABLE;
     if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_RUN_WAIT)) {
         // check if we need to start one transaction
-        if (xQueueReceive(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &t, 0) == pdTRUE) {
+        ret = k_msgq_get(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &t, K_NO_WAIT);
+        if (ret == 0) {
             atomic_store(&channel->fsm, RMT_FSM_RUN);
             rmt_tx_do_transaction(tx_chan, t);
         }
@@ -566,15 +587,26 @@ esp_err_t rmt_transmit(rmt_channel_handle_t channel, rmt_encoder_t* encoder, voi
 esp_err_t rmt_tx_wait_all_done(rmt_channel_handle_t channel, int timeout_ms) {
     ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
     rmt_tx_channel_t* tx_chan = __containerof(channel, rmt_tx_channel_t, base);
-    TickType_t wait_ticks = timeout_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+    k_timeout_t timeout = (timeout_ms < 0) ? K_FOREVER : K_MSEC(timeout_ms);
     // recycle all transaction that are on the fly
     rmt_tx_trans_desc_t* t = NULL;
     size_t num_trans_inflight = tx_chan->num_trans_inflight;
+    int ret;
+
     for (size_t i = 0; i < num_trans_inflight; i++) {
-        ESP_RETURN_ON_FALSE(xQueueReceive(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &t, wait_ticks) == pdTRUE,
-                            ESP_ERR_TIMEOUT, TAG, "flush timeout");
-        ESP_RETURN_ON_FALSE(xQueueSend(tx_chan->trans_queues[RMT_TX_QUEUE_READY], &t, 0) == pdTRUE,
-                            ESP_ERR_INVALID_STATE, TAG, "ready queue full");
+        ret = k_msgq_get(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &t, timeout);
+        if (ret == 0) {
+            ret = k_msgq_put(tx_chan->trans_queues[RMT_TX_QUEUE_READY], &t, 0);
+            if (ret != 0) {
+                // "ready queue full"
+                return (ESP_ERR_INVALID_STATE);
+            }
+        }
+        else {
+            // "flush timeout"
+            return (ESP_ERR_TIMEOUT);
+        }
+
         tx_chan->num_trans_inflight--;
     }
 
@@ -736,6 +768,7 @@ static esp_err_t rmt_tx_enable(rmt_channel_handle_t channel) {
                         ESP_ERR_INVALID_STATE, TAG, "channel not in init state");
     rmt_tx_channel_t* tx_chan = __containerof(channel, rmt_tx_channel_t, base);
     k_spinlock_key_t key;
+    int ret;
 
     // acquire power manager lock
     if (channel->pm_lock) {
@@ -762,7 +795,8 @@ static esp_err_t rmt_tx_enable(rmt_channel_handle_t channel) {
     rmt_tx_trans_desc_t* t = NULL;
     expected_fsm = RMT_FSM_ENABLE;
     if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_RUN_WAIT)) {
-        if (xQueueReceive(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &t, 0) == pdTRUE) {
+        ret = k_msgq_get(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &t, K_NO_WAIT);
+        if (ret == 0) {
             // sanity check
             assert(t);
             atomic_store(&channel->fsm, RMT_FSM_RUN);
@@ -830,7 +864,7 @@ static esp_err_t rmt_tx_disable(rmt_channel_handle_t channel) {
 
     // recycle the interrupted transaction
     if (tx_chan->cur_trans) {
-        xQueueSend(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &tx_chan->cur_trans, 0);
+        (void) k_msgq_put(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &tx_chan->cur_trans, K_NO_WAIT);
         // reset corresponding encoder
         rmt_encoder_reset(tx_chan->cur_trans->encoder);
     }
@@ -917,7 +951,7 @@ static bool IRAM_ATTR rmt_isr_handle_tx_done(rmt_tx_channel_t* tx_chan) {
     if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_ENABLE_WAIT)) {
         trans_desc = tx_chan->cur_trans;
         // move current finished transaction to the complete queue
-        xQueueSendFromISR(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &trans_desc, &awoken);
+        (void) k_msgq_put(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &trans_desc, K_NO_WAIT);
         if (awoken == pdTRUE) {
             need_yield = true;
         }
@@ -939,7 +973,8 @@ static bool IRAM_ATTR rmt_isr_handle_tx_done(rmt_tx_channel_t* tx_chan) {
     // let's try start the next pending transaction
     expected_fsm = RMT_FSM_ENABLE;
     if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_RUN_WAIT)) {
-        if (xQueueReceiveFromISR(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &trans_desc, &awoken) == pdTRUE) {
+        int ret = k_msgq_get(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &trans_desc, K_NO_WAIT);
+        if (ret == 0) {
             // sanity check
             assert(trans_desc);
             atomic_store(&channel->fsm, RMT_FSM_RUN);
@@ -997,10 +1032,7 @@ static bool IRAM_ATTR rmt_isr_handle_tx_loop_end(rmt_tx_channel_t* tx_chan) {
         rmt_fsm_t expected_fsm = RMT_FSM_RUN;
         if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_ENABLE_WAIT)) {
             // move current finished transaction to the complete queue
-            xQueueSendFromISR(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &trans_desc, &awoken);
-            if (awoken == pdTRUE) {
-                need_yield = true;
-            }
+            (void) k_msgq_put(tx_chan->trans_queues[RMT_TX_QUEUE_COMPLETE], &trans_desc, K_NO_WAIT);
             tx_chan->cur_trans = NULL;
             atomic_store(&channel->fsm, RMT_FSM_ENABLE);
 
@@ -1019,15 +1051,13 @@ static bool IRAM_ATTR rmt_isr_handle_tx_loop_end(rmt_tx_channel_t* tx_chan) {
         // let's try start the next pending transaction
         expected_fsm = RMT_FSM_ENABLE;
         if (atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_RUN_WAIT)) {
-            if (xQueueReceiveFromISR(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &trans_desc, &awoken) == pdTRUE) {
+            int ret = k_msgq_get(tx_chan->trans_queues[RMT_TX_QUEUE_PROGRESS], &trans_desc, K_NO_WAIT);
+            if (ret == 0) {
                 // sanity check
                 assert(trans_desc);
                 atomic_store(&channel->fsm, RMT_FSM_RUN);
                 // begin a new transaction
                 rmt_tx_do_transaction(tx_chan, trans_desc);
-                if (awoken == pdTRUE) {
-                    need_yield = true;
-                }
             }
             else {
                 atomic_store(&channel->fsm, RMT_FSM_ENABLE);
